@@ -14,6 +14,7 @@
 #include <sys/types.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 #include <time.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -102,6 +103,9 @@ bool tile = false;
 bool scale = false;
 bool ignore_empty_password = false;
 bool skip_repeated_empty_password = false;
+
+static char *image_path = NULL;
+static char *image_raw_format = NULL;
 
 /* isutf, u8_dec © 2005 Jeff Bezanson, public domain */
 #define isutf(c) (((c)&0xC0) != 0x80)
@@ -1033,11 +1037,42 @@ static void raise_loop(xcb_window_t window) {
     }
 }
 
+static void load_image() {
+    if (image_raw_format != NULL && image_path != NULL) {
+        /* Read image. 'read_raw_image' returns NULL on error,
+         * so we don't have to handle errors here. */
+        img = read_raw_image(image_path, image_raw_format);
+    } else if (verify_png_image(image_path)) {
+        /* Create a pixmap to render on, fill it with the background color */
+        img = cairo_image_surface_create_from_png(image_path);
+        /* In case loading failed, we just pretend no -i was specified. */
+        if (cairo_surface_status(img) != CAIRO_STATUS_SUCCESS) {
+            fprintf(stderr, "Could not load image \"%s\": %s\n",
+                    image_path, cairo_status_to_string(cairo_surface_status(img)));
+            img = NULL;
+        }
+    }
+}
+
+static void reload_image() {
+    cairo_surface_t *old_img = img;
+    load_image();
+    if(img != NULL) {
+	redraw_screen();
+	DEBUG("Image reloaded\n");
+    }
+    if(old_img != NULL) {
+	if(img == NULL) {
+	    img = old_img;
+	} else {
+	    cairo_surface_destroy(old_img);
+	}
+    }
+}
+
 int main(int argc, char *argv[]) {
     struct passwd *pw;
     char *username;
-    char *image_path = NULL;
-    char *image_raw_format = NULL;
 #ifndef __OpenBSD__
     int ret;
     struct pam_conv conv = {conv_callback, NULL};
@@ -1244,23 +1279,8 @@ int main(int argc, char *argv[]) {
     xcb_change_window_attributes(conn, screen->root, XCB_CW_EVENT_MASK,
                                  (uint32_t[]){XCB_EVENT_MASK_STRUCTURE_NOTIFY});
 
-    if (image_raw_format != NULL && image_path != NULL) {
-        /* Read image. 'read_raw_image' returns NULL on error,
-         * so we don't have to handle errors here. */
-        img = read_raw_image(image_path, image_raw_format);
-    } else if (verify_png_image(image_path)) {
-        /* Create a pixmap to render on, fill it with the background color */
-        img = cairo_image_surface_create_from_png(image_path);
-        /* In case loading failed, we just pretend no -i was specified. */
-        if (cairo_surface_status(img) != CAIRO_STATUS_SUCCESS) {
-            fprintf(stderr, "Could not load image \"%s\": %s\n",
-                    image_path, cairo_status_to_string(cairo_surface_status(img)));
-            img = NULL;
-        }
-    }
-
-    free(image_path);
-    free(image_raw_format);
+    load_image();
+    signal(SIGHUP, reload_image);
 
     /* Pixmap on which the image is rendered to (if any) */
     xcb_pixmap_t bg_pixmap = draw_image(last_resolution);
