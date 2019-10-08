@@ -80,6 +80,7 @@ static xcb_visualtype_t *vistype;
  * indicator. */
 unlock_state_t unlock_state;
 auth_state_t auth_state;
+int grace_angle;
 
 /*
  * Draws global image with fill color onto a pixmap with the given
@@ -144,7 +145,7 @@ xcb_pixmap_t draw_image(uint32_t *resolution) {
                   2 * M_PI /* end */);
 
         /* Use the appropriate color for the different PAM states
-         * (currently verifying, wrong password, or default) */
+         * (currently verifying, wrong password, grace period, or default) */
         switch (auth_state) {
             case STATE_AUTH_VERIFY:
             case STATE_AUTH_LOCK:
@@ -153,6 +154,9 @@ xcb_pixmap_t draw_image(uint32_t *resolution) {
             case STATE_AUTH_WRONG:
             case STATE_I3LOCK_LOCK_FAILED:
                 cairo_set_source_rgba(ctx, 250.0 / 255, 0, 0, 0.75);
+                break;
+            case STATE_GRACE_PERIOD:
+                cairo_set_source_rgba(ctx, 125.0 / 255, 125.0 / 255, 25.0 / 255, .75);
                 break;
             default:
                 if (unlock_state == STATE_NOTHING_TO_DELETE) {
@@ -172,6 +176,9 @@ xcb_pixmap_t draw_image(uint32_t *resolution) {
             case STATE_AUTH_WRONG:
             case STATE_I3LOCK_LOCK_FAILED:
                 cairo_set_source_rgb(ctx, 125.0 / 255, 51.0 / 255, 0);
+                break;
+            case STATE_GRACE_PERIOD:
+                cairo_set_source_rgba(ctx, 125.0 / 255, 125.0 / 255, 25.0 / 255, .75);
                 break;
             case STATE_AUTH_IDLE:
                 if (unlock_state == STATE_NOTHING_TO_DELETE) {
@@ -217,6 +224,9 @@ xcb_pixmap_t draw_image(uint32_t *resolution) {
                 break;
             case STATE_I3LOCK_LOCK_FAILED:
                 text = "Lock failed!";
+                break;
+            case STATE_GRACE_PERIOD:
+                text = "Unlocked…";
                 break;
             default:
                 if (unlock_state == STATE_NOTHING_TO_DELETE) {
@@ -267,9 +277,16 @@ xcb_pixmap_t draw_image(uint32_t *resolution) {
          * highlight a random part of the unlock indicator to confirm this
          * keypress. */
         if (unlock_state == STATE_KEY_ACTIVE ||
-            unlock_state == STATE_BACKSPACE_ACTIVE) {
+            unlock_state == STATE_BACKSPACE_ACTIVE ||
+            auth_state == STATE_GRACE_PERIOD) {
             cairo_new_sub_path(ctx);
-            double highlight_start = (rand() % (int)(2 * M_PI * 100)) / 100.0;
+            double angle;
+            if (auth_state == STATE_GRACE_PERIOD) {
+                angle = (--grace_angle % 128) / 128.0;
+            } else {
+                angle = (rand() % 128) / 128.0;
+            }
+            double highlight_start = 2 * M_PI * angle;
             cairo_arc(ctx,
                       BUTTON_CENTER /* x */,
                       BUTTON_CENTER /* y */,

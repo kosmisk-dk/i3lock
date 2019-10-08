@@ -56,6 +56,8 @@
 #define STOP_TIMER(timer_obj) \
     timer_obj = stop_timer(timer_obj)
 
+#define GRACE_FREQUENCY 15
+
 typedef void (*ev_callback_t)(EV_P_ ev_timer *w, int revents);
 static void input_done(void);
 
@@ -79,6 +81,7 @@ struct ev_loop *main_loop;
 static struct ev_timer *clear_auth_wrong_timeout;
 static struct ev_timer *clear_indicator_timeout;
 static struct ev_timer *discard_passwd_timeout;
+static struct ev_timer *grace_period_timeout;
 extern unlock_state_t unlock_state;
 extern auth_state_t auth_state;
 int failed_attempts = 0;
@@ -216,6 +219,24 @@ ev_timer *stop_timer(ev_timer *timer_obj) {
         free(timer_obj);
     }
     return NULL;
+}
+
+static bool in_grace_period() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (ts.tv_sec < grace_timeout.tv_sec ||
+            (ts.tv_sec == grace_timeout.tv_sec &&
+             ts.tv_nsec < grace_timeout.tv_nsec));
+}
+
+static void grace_period_indicator(EV_P_ ev_timer *w, int revents) {
+    DEBUG("grace period timer\n");
+    if (in_grace_period()) {
+        START_TIMER(grace_period_timeout, 1.0 / GRACE_FREQUENCY, grace_period_indicator);
+    } else {
+        auth_state = STATE_AUTH_IDLE;
+    }
+    redraw_screen();
 }
 
 /*
@@ -389,17 +410,13 @@ static bool skip_without_validation(void) {
  *
  */
 static void handle_key_press(xcb_key_press_event_t *event) {
-    struct timespec ts;
     xkb_keysym_t ksym;
     char buffer[128];
     int n;
     bool ctrl;
     bool composed = false;
 
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    if (ts.tv_sec < grace_timeout.tv_sec ||
-        (ts.tv_sec == grace_timeout.tv_sec &&
-         ts.tv_nsec < grace_timeout.tv_nsec)) {
+    if (in_grace_period()) {
         DEBUG("keypress within grace period\n");
         exit(0);
     }
@@ -1126,9 +1143,6 @@ int main(int argc, char *argv[]) {
     /* We need (relatively) random numbers for highlighting a random part of
      * the unlock indicator upon keypresses. */
     srand(time(NULL));
-    if (clock_gettime(CLOCK_MONOTONIC, &grace_timeout) != 0)
-        errx(EXIT_FAILURE, "Cannot get current time: %s", strerror(errno));
-    grace_timeout.tv_sec += grace_timeout_seconds;
 
 #ifndef __OpenBSD__
     /* Initialize PAM */
@@ -1294,8 +1308,19 @@ int main(int argc, char *argv[]) {
     if (main_loop == NULL)
         errx(EXIT_FAILURE, "Could not initialize libev. Bad LIBEV_FLAGS?");
 
+    if (clock_gettime(CLOCK_MONOTONIC, &grace_timeout) != 0)
+        errx(EXIT_FAILURE, "Cannot get current time: %s", strerror(errno));
+    grace_timeout.tv_sec += grace_timeout_seconds;
+    grace_angle = grace_timeout_seconds * GRACE_FREQUENCY - (128 * 1 / 4 + 128 * 1 / 16 + 1); /* align with top on completion */
+
+    /* Start in grace period if enabled otherwise in idle */
+    if (in_grace_period()) {
+        auth_state = STATE_GRACE_PERIOD;
+        START_TIMER(grace_period_timeout, 1.0 / GRACE_FREQUENCY, grace_period_indicator);
+    } else {
+        auth_state = STATE_AUTH_IDLE;
+    }
     /* Explicitly call the screen redraw in case "locking…" message was displayed */
-    auth_state = STATE_AUTH_IDLE;
     redraw_screen();
 
     struct ev_io *xcb_watcher = calloc(sizeof(struct ev_io), 1);

@@ -17,10 +17,12 @@ typedef enum {
     STATE_AUTH_LOCK = 2,          /* currently locking the screen */
     STATE_AUTH_WRONG = 3,         /* the password was wrong */
     STATE_I3LOCK_LOCK_FAILED = 4, /* i3lock failed to load */
+    STATE_GRACE_PERIOD = 5,       /* grace period */
 } auth_state_t;
 
 xcb_pixmap_t draw_image(uint32_t* resolution);
 void redraw_screen(void);
 void clear_indicator(void);
 
+extern int grace_angle;
 #endif
